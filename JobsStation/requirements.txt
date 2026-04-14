@@ -1,0 +1,10 @@
+#di terminal, kalian jalankan dengan cara
+#pip install -qU -r requirements.txt
+
+langchain
+langchain-openai
+langchain-community
+langchain-core
+langgraph
+langfuse
+python-dotenv
