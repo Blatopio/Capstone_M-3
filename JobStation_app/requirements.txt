@@ -1,23 +1,23 @@
-#di terminal, kalian jalankan dengan cara
-#pip install -qU -r requirements.txt
-
-# ─── LLM & AGENTS ─────────────────────────────────────────────────────────────
+#LLM
 langchain
 langchain-openai
 langchain-community
+langchain_core
+langchain_qdrant
+
 langgraph
 openai
  
-# ─── VECTOR DATABASE ───────────────────────────────────────────────────────────
+#VECTOR DATABASE
 qdrant-client
  
-# ─── SQL DATABASE ──────────────────────────────────────────────────────────────
+#SQL DATABASE
 mysql-connector-python
  
-# ─── UI ────────────────────────────────────────────────────────────────────────
+#UI
 streamlit
  
-# ─── DATA & UTILITIES ─────────────────────────────────────────────────────────
+#DATA & UTILITIES
 pandas
 python-dotenv
 tqdm
