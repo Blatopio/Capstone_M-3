@@ -6,6 +6,7 @@ langchain_core
 langchain_qdrant
 
 langgraph
+
 openai
  
 #VECTOR DATABASE

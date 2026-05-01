@@ -11,7 +11,7 @@ from qdrant_client import QdrantClient
 
 import mysql.connector
 
-from tools import *
+from JobStation_app.tools import *
 
 
 load_dotenv()
