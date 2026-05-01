@@ -11,7 +11,7 @@ from qdrant_client import QdrantClient
 
 import mysql.connector
 
-from JobStation_app.tools import *
+from JobStation_app.config import * 
 
 
 load_dotenv()
@@ -168,6 +168,19 @@ def main():
         qdrant_client.delete_collection(collection_name=COLLECTION_NAME)
     
     documents = []
+    for i in range(len(df)):
+        doc = Document(
+            page_content=df["Resume_str"].iloc[i],
+            metadata={
+                "candidate_id": int(df["ID"].iloc[i]),
+                "category":     df["Category"].iloc[i],
+                "prof_level":   df["prof_level"].iloc[i],
+            }
+        )
+        documents.append(doc)
+
+    print(f"   📄 {len(documents)} documents built.")
+
     for i in range(0, len(documents), BATCH_SIZE):
         batch = documents[i : i + BATCH_SIZE]
         
@@ -175,7 +188,7 @@ def main():
             # First batch — creates the collection
             vectorstore = QdrantVectorStore.from_documents(
                 batch,
-                embedding=embedding_model(),
+                embedding=embedding_model,
                 url=QDRANT_URL,
                 api_key=QDRANT_API_KEY,
                 collection_name=COLLECTION_NAME,
