@@ -3,6 +3,7 @@ import re
 
 import pandas as pd
 from dotenv import load_dotenv
+load_dotenv(dotenv_path=r"C:\Alghi\Boothcamp\Purwadhika\Capstone\Capstone_M-3\JobStation_app\.env")
 
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.documents import Document
@@ -11,13 +12,12 @@ from qdrant_client import QdrantClient
 
 import mysql.connector
 
-from JobStation_app.config import * 
+from langchain_openai import OpenAIEmbeddings
+embedding_model = OpenAIEmbeddings(model="text-embedding-3-small") 
 
-
-load_dotenv()
 
 # CONFIGURATION
-CSV_PATH = r"C:\Alghi\Boothcamp\Purwadhika\Capstone\Capstone_M-3\JobStation_app\data\Resume.csv"
+CSV_PATH = r"C:\Alghi\Boothcamp\Purwadhika\Capstone\Capstone_M-3\data\Resume.csv"
 COLLECTION_NAME = "resumes_job_candidates"
 BATCH_SIZE = 100
 
@@ -161,11 +161,11 @@ def main():
 
     # 5. Qdrant — embed and upsert
     print("Making a documents list for Qdrant ingestion...")
-    if not qdrant_client.get_collection(collection_name=COLLECTION_NAME):
-        print(f"   Collection '{COLLECTION_NAME}' does not exist. It will be created on first upsert.")
-    else:
-        print(f"   Collection '{COLLECTION_NAME}' already exists. delete exist one.")
-        qdrant_client.delete_collection(collection_name=COLLECTION_NAME)
+    # if not qdrant_client.get_collection(collection_name=COLLECTION_NAME):
+    #     print(f"   Collection '{COLLECTION_NAME}' does not exist. It will be created on first upsert.")
+    # else:
+    #     print(f"   Collection '{COLLECTION_NAME}' already exists. delete exist one.")
+    #     qdrant_client.delete_collection(collection_name=COLLECTION_NAME)
     
     documents = []
     for i in range(len(df)):
