@@ -24,8 +24,8 @@ llm = ChatOpenAI(
 )
 
 embedding_model = OpenAIEmbeddings(
-    model     = "text-embedding-3-small",
-    callbacks = [langfuse_handler],
+    model = "text-embedding-3-small",
+    # callbacks not supported on embeddings — tracing handled via LLM calls
 )
 
 qdrant_client = QdrantClient(

@@ -20,6 +20,7 @@ MYSQL_URI = (
     f"{MYSQL_CONFIG['port']}/{MYSQL_CONFIG['database']}"
 )
 
+
 def get_mysql_connection():
     """Returns a live MySQL connection using env config."""
     return mysql.connector.connect(**MYSQL_CONFIG)
@@ -35,43 +36,91 @@ def get_qdrant_vectorstore() -> QdrantVectorStore:
     )
 
 
+def _extract_text_from_payload(payload: dict) -> str | None:
+    """Extracts CV text from a Qdrant point payload."""
+    if not payload:
+        return None
+    return (
+        payload.get("page_content")
+        or payload.get("content")
+        or payload.get("text")
+        or None
+    )
+
+
 def get_cv_text_by_username(username: str) -> str | None:
     """
-    Looks up a jobseeker's qdrant_id from MySQL users table,
-    then fetches the CV text directly from Qdrant by point ID.
-    Returns the CV text string, or None if not found.
+    Fetches CV text for a jobseeker from Qdrant.
+
+    Strategy 1: retrieve by qdrant_id from MySQL (direct, fast)
+    Strategy 2: scroll ALL points, match metadata.username in Python
+                (no Qdrant index needed)
+
+    Returns CV text string or None.
     """
+    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+
+    # ── Strategy 1: direct point retrieval via MySQL qdrant_id ────────────────
     try:
-        # Step 1: get qdrant_id from MySQL
         conn   = get_mysql_connection()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute(
-            "SELECT qdrant_id FROM users WHERE username = %s", (username,)
-        )
+        cursor.execute("SELECT qdrant_id FROM users WHERE username = %s", (username,))
         row = cursor.fetchone()
         cursor.close()
         conn.close()
 
-        if not row or not row.get("qdrant_id"):
-            return None
+        if row and row.get("qdrant_id"):
+            qdrant_id = row["qdrant_id"]
+            points    = client.retrieve(
+                collection_name=COLLECTION_NAME,
+                ids=[qdrant_id],
+                with_payload=True,
+            )
+            if points:
+                text = _extract_text_from_payload(points[0].payload)
+                if text:
+                    return text
+    except Exception:
+        pass
 
-        qdrant_id = row["qdrant_id"]
+    # ── Strategy 2: scroll all points, match username in Python ───────────────
+    try:
+        all_points = []
+        offset     = None
+        while True:
+            batch, offset = client.scroll(
+                collection_name=COLLECTION_NAME,
+                with_payload=True,
+                with_vectors=False,
+                limit=100,
+                offset=offset,
+            )
+            all_points.extend(batch)
+            if offset is None:
+                break
 
-        # Step 2: fetch point from Qdrant by UUID
-        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-        points = client.retrieve(
-            collection_name=COLLECTION_NAME,
-            ids=[qdrant_id],
-            with_payload=True,
-        )
+        for point in all_points:
+            payload  = point.payload or {}
+            metadata = payload.get("metadata", {})
+            if metadata.get("username") == username:
+                text = _extract_text_from_payload(payload)
+                if text:
+                    # Auto-fix MySQL qdrant_id to the actual point ID
+                    try:
+                        actual_id = str(point.id)
+                        conn      = get_mysql_connection()
+                        cursor    = conn.cursor()
+                        cursor.execute(
+                            "UPDATE users SET qdrant_id = %s WHERE username = %s",
+                            (actual_id, username)
+                        )
+                        conn.commit()
+                        cursor.close()
+                        conn.close()
+                    except Exception:
+                        pass
+                    return text
+    except Exception:
+        pass
 
-        if not points:
-            return None
-
-        # LangChain stores the text in payload["page_content"]
-        payload = points[0].payload or {}
-        return payload.get("page_content") or payload.get("content") or None
-
-    except Exception as e:
-        print(f"get_cv_text_by_username error: {e}")
-        return None
+    return None

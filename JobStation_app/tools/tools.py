@@ -165,7 +165,6 @@ def upload_cv_tool(cv_text: str, category: str, username: str) -> str:
         category: job category e.g. "HR", "ENGINEERING"
         username: the logged-in jobseeker's username
     """
-    # ── FIX: infer prof_level from CV rather than always using 'junior' ───────
     prof_level    = _infer_prof_level(cv_text)
     new_qdrant_id = str(uuid.uuid4())
 
@@ -173,13 +172,15 @@ def upload_cv_tool(cv_text: str, category: str, username: str) -> str:
         page_content=cv_text,
         metadata={
             "candidate_id": new_qdrant_id,
+            "username":     username,
             "category":     category.upper(),
-            "prof_level":   prof_level,         # ← was always "junior" before
+            "prof_level":   prof_level,
             "source":       "jobseeker_upload",
         }
     )
     vectorstore = get_qdrant_vectorstore()
-    vectorstore.add_documents([doc])
+    # Pass ids= explicitly so Qdrant uses our UUID, not an auto-generated one
+    vectorstore.add_documents([doc], ids=[new_qdrant_id])
 
     conn   = get_mysql_connection()
     cursor = conn.cursor()

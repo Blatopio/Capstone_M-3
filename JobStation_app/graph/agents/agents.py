@@ -11,6 +11,28 @@ from JobStation_app.tools import (
     get_recommendations_tool,
 )
 from JobStation_app.graph.state import State
+from JobStation_app.tools.utils import get_cv_text_by_username
+
+
+# ─── CV CONTEXT HELPER ────────────────────────────────────────────────────────
+def _get_cv_context(username: str) -> str:
+    """
+    Fetches the stored CV from Qdrant for the given username and returns
+    a formatted block to inject into agent system prompts.
+    Returns empty string if no CV is found.
+    """
+    cv_text = get_cv_text_by_username(username)
+    if not cv_text:
+        return ""
+    return f"""
+JOBSEEKER CV ON FILE:
+The user has already uploaded their CV. Here is the content:
+---
+{cv_text[:3000]}
+---
+Use this to answer questions about their background, skills, experience,
+job category, and career fit. Do NOT ask them to paste or re-upload their CV.
+"""
 
 
 # ─── STRUCTURED OUTPUT FOR SUPERVISOR ─────────────────────────────────────────
@@ -107,10 +129,13 @@ def jobseeker_agent_node(state: State) -> dict:
     Handles jobseeker platform actions.
     Can call upload_cv_tool or get_recommendations_tool.
     """
+    cv_context    = _get_cv_context(state["username"])
     system_prompt = SystemMessage(content=f"""
 You are a helpful career assistant for JobStation, a job placement platform.
 
 You are currently helping: {state['username']} (jobseeker)
+
+{cv_context}
 
 You can help with:
 1. Uploading their CV to the platform so companies can find them
@@ -122,6 +147,7 @@ IMPORTANT RULES:
   username='{state['username']}'. NEVER ask the user to paste their CV text —
   the tool fetches it automatically from the database.
 - If the user asks about recommendations from their uploaded CV, call the tool immediately.
+- If the CV is already on file (shown above), answer questions about it directly.
 
 Be friendly, encouraging, and professional.
 After completing a task, summarize what was done clearly.
@@ -180,11 +206,19 @@ def general_agent_node(state: State) -> dict:
     the supervisor detects a plain AI reply and returns FINISH.
     This breaks the general_agent → supervisor → general_agent loop.
     """
+    cv_context    = _get_cv_context(state["username"]) if state["role"] == "jobseeker" else ""
     system_prompt = SystemMessage(content=f"""
 You are a friendly and knowledgeable assistant for JobStation,
 a job placement platform in Indonesia.
 
 You are talking to: {state['username']} (role: {state['role']})
+
+IMPORTANT — USER IDENTITY:
+- The user's username on this platform is: {state['username']}
+- If they ask "what is my name", "who am I", or similar, tell them their username is '{state['username']}'.
+- Today's date is: {__import__('datetime').datetime.now().strftime('%A, %d %B %Y')}
+
+{cv_context}
 
 PLATFORM INFORMATION:
 - Mission: connect companies directly with candidates — no outsourcing middlemen,

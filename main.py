@@ -1,6 +1,12 @@
 import streamlit as st
 import pdfplumber
 import io
+import warnings
+import logging
+
+# Suppress noisy LangGraph propagation warnings
+warnings.filterwarnings("ignore", message="Propagated attribute.*")
+logging.getLogger("langgraph").setLevel(logging.ERROR)
 
 from JobStation_app.graph.workflow import app
 from JobStation_app.tools.utils import *
@@ -28,6 +34,10 @@ if "chat_meta"  not in st.session_state:
     # Parallel list to AI messages only.
     # Each entry: {"tool_results": [...], "input_tokens": int, "output_tokens": int}
     st.session_state.chat_meta  = []
+if "last_rendered_count" not in st.session_state:
+    # Tracks how many AI messages were rendered in the previous run
+    # Used to skip the last one when it was just rendered directly (avoids duplicate)
+    st.session_state.last_rendered_count = 0
 
 
 # ─── HELPERS ───────────────────────────────────────────────────────────────────
@@ -202,12 +212,23 @@ def show_login():
 # ─── CHAT INTERFACE ────────────────────────────────────────────────────────────
 def show_chat():
     # Replay stored history with metadata expanders
+    # On a fresh response (new message just added), the last AI turn is rendered
+    # directly below by render_assistant_turn() — skip it here to avoid duplicates.
+    # On page refresh / rerun with no new input, render all messages normally.
+    ai_messages      = [m for m in st.session_state.messages if m.type == "ai"]
+    total_ai         = len(ai_messages)
+    skip_last_ai     = (total_ai > st.session_state.last_rendered_count)
+
     ai_turn_index = 0
     for msg in st.session_state.messages:
         if msg.type == "human":
             with st.chat_message("user"):
                 st.markdown(msg.content)
         else:
+            # Skip the latest AI message if it was just rendered directly
+            if skip_last_ai and ai_turn_index == total_ai - 1:
+                ai_turn_index += 1
+                continue
             meta = (
                 st.session_state.chat_meta[ai_turn_index]
                 if ai_turn_index < len(st.session_state.chat_meta)
@@ -215,6 +236,8 @@ def show_chat():
             )
             render_assistant_turn(msg.content, meta)
             ai_turn_index += 1
+
+    st.session_state.last_rendered_count = total_ai
 
     # CV upload widget (jobseekers only)
     if st.session_state.role == "jobseeker":
@@ -271,15 +294,15 @@ def show_chat():
             result = run_agent(prompt)
 
         st.session_state.messages.append(AIMessage(content=result["response"]))
-        st.session_state.chat_meta.append({
+        meta = {
             "tool_results":  result["tool_results"],
             "input_tokens":  result["input_tokens"],
             "output_tokens": result["output_tokens"],
-        })
+        }
+        st.session_state.chat_meta.append(meta)
 
-        # st.rerun() replays show_chat() which renders the message via history loop
-        # DO NOT call render_assistant_turn() here — it would duplicate the bubble
-        st.rerun()
+        # Render directly here — no st.rerun() to avoid duplicate bubble
+        render_assistant_turn(result["response"], meta)
 
 
 # ─── ADMIN PANEL ───────────────────────────────────────────────────────────────
@@ -362,6 +385,150 @@ def main():
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
+
+        # ── DEBUG PANEL ───────────────────────────────────────────────────────
+        st.divider()
+        st.caption("🛠️ Debug Panel")
+        if st.button("🔍 Check CV in DB", use_container_width=True):
+            from JobStation_app.tools.utils import get_mysql_connection, get_cv_text_by_username, COLLECTION_NAME
+            from qdrant_client import QdrantClient
+            from JobStation_app.config import QDRANT_URL, QDRANT_API_KEY
+
+            username = st.session_state.username
+
+            # Step 1: Check MySQL for qdrant_id
+            try:
+                conn   = get_mysql_connection()
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute("SELECT qdrant_id FROM users WHERE username = %s", (username,))
+                row = cursor.fetchone()
+                cursor.close()
+                conn.close()
+                if row:
+                    st.success(f"✅ MySQL: qdrant_id = `{row['qdrant_id']}`")
+                    qdrant_id = row.get("qdrant_id")
+                else:
+                    st.error("❌ MySQL: user not found")
+                    qdrant_id = None
+            except Exception as e:
+                st.error(f"❌ MySQL error: {e}")
+                qdrant_id = None
+
+            # Step 2: Fetch point from Qdrant
+            if qdrant_id:
+                try:
+                    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+                    points = client.retrieve(
+                        collection_name=COLLECTION_NAME,
+                        ids=[qdrant_id],
+                        with_payload=True,
+                    )
+                    if points:
+                        payload = points[0].payload or {}
+                        st.success(f"✅ Qdrant: point found")
+                        st.write("**Payload keys:**", list(payload.keys()))
+                        # Show first 300 chars of text content
+                        for key in ["page_content", "content", "text"]:
+                            if key in payload:
+                                st.info(f"**Text key: `{key}`**")
+                                st.code(str(payload[key])[:300])
+                                break
+                        else:
+                            st.warning("⚠️ No known text key found in payload")
+                            st.json(payload)
+                    else:
+                        st.error(f"❌ Qdrant: no point found for id `{qdrant_id}`")
+                except Exception as e:
+                    st.error(f"❌ Qdrant error: {e}")
+
+            # Step 3: Test the full helper
+            st.divider()
+            cv = get_cv_text_by_username(username)
+            if cv:
+                st.success("✅ get_cv_text_by_username: OK")
+                st.code(cv[:300])
+            else:
+                st.error("❌ get_cv_text_by_username: returned None")
+
+        # One-time patch: inject username into existing Qdrant point
+        if st.button("🔧 Patch Qdrant metadata", use_container_width=True):
+            from JobStation_app.tools.utils import get_mysql_connection, COLLECTION_NAME
+            from qdrant_client import QdrantClient
+            from qdrant_client.models import SetPayload
+            from JobStation_app.config import QDRANT_URL, QDRANT_API_KEY
+
+            username = st.session_state.username
+            try:
+                conn   = get_mysql_connection()
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute("SELECT qdrant_id FROM users WHERE username = %s", (username,))
+                row = cursor.fetchone()
+                cursor.close()
+                conn.close()
+
+                if row and row.get("qdrant_id"):
+                    qdrant_id = row["qdrant_id"]
+                    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+
+                    # Scroll ALL points, match in Python (no Qdrant index needed)
+                    all_points = []
+                    offset = None
+                    while True:
+                        batch, next_offset = client.scroll(
+                            collection_name=COLLECTION_NAME,
+                            with_payload=True,
+                            with_vectors=False,
+                            limit=100,
+                            offset=offset,
+                        )
+                        all_points.extend(batch)
+                        if next_offset is None:
+                            break
+                        offset = next_offset
+
+                    st.info(f"Total points found: {len(all_points)}")
+
+                    # Find point belonging to this user
+                    target = None
+                    for p in all_points:
+                        payload  = p.payload or {}
+                        metadata = payload.get("metadata", {})
+                        if (metadata.get("username") == username or
+                                metadata.get("source") == "jobseeker_upload"):
+                            target = p
+                            break
+
+                    if target:
+                        actual_id   = str(target.id)
+                        payload     = target.payload or {}
+                        existing_meta = payload.get("metadata", {})
+
+                        # Merge username into existing metadata (don't overwrite!)
+                        merged_meta = {**existing_meta, "username": username}
+                        client.set_payload(
+                            collection_name=COLLECTION_NAME,
+                            payload={"metadata": merged_meta},
+                            points=[target.id],
+                        )
+                        st.success(f"✅ Patched point `{actual_id}` — metadata: {merged_meta}")
+
+                        # Fix MySQL to point to actual ID
+                        conn   = get_mysql_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "UPDATE users SET qdrant_id = %s WHERE username = %s",
+                            (actual_id, username)
+                        )
+                        conn.commit()
+                        cursor.close()
+                        conn.close()
+                        st.success(f"✅ MySQL qdrant_id fixed to `{actual_id}`")
+                    else:
+                        st.error("❌ No jobseeker_upload point found in Qdrant")
+                else:
+                    st.error("❌ No qdrant_id found in MySQL for this user")
+            except Exception as e:
+                st.error(f"❌ Patch error: {e}")
 
     if st.session_state.role == "company":
         chat_tab, admin_tab = st.tabs(["💬 Chat", "🗂️ Candidates"])
