@@ -4,6 +4,7 @@ import io
 
 from JobStation_app.graph.workflow import app
 from JobStation_app.tools.utils import *
+from JobStation_app.config import langfuse_handler
 
 from langchain_core.messages import HumanMessage
 
@@ -15,19 +16,19 @@ st.set_page_config(
 )
 
 # ─── SESSION STATE INIT ────────────────────────────────────────────────────────
-if "logged_in" not in st.session_state:
+if "logged_in"  not in st.session_state:
     st.session_state.logged_in  = False
-if "username" not in st.session_state:
+if "username"   not in st.session_state:
     st.session_state.username   = ""
-if "role" not in st.session_state:
+if "role"       not in st.session_state:
     st.session_state.role       = ""
-if "messages" not in st.session_state:
+if "messages"   not in st.session_state:
     st.session_state.messages   = []
 
 
 # ─── HELPERS ───────────────────────────────────────────────────────────────────
 def verify_login(username: str, password: str) -> dict | None:
-    """Check credentials against MySQL users table. Returns user row or None."""
+    """Check credentials against MySQL users table."""
     try:
         conn   = get_mysql_connection()
         cursor = conn.cursor(dictionary=True)
@@ -55,18 +56,27 @@ def extract_pdf_text(uploaded_file) -> str:
 def run_agent(user_input: str) -> str:
     """
     Invoke the LangGraph app with current session state.
+    Langfuse traces the full session via langfuse_handler.
     Returns the agent's final text response.
     """
+    # ── tag Langfuse session with current user ────────────────────────────────
+    langfuse_handler.session_id = f"jobstation-{st.session_state.username}"
+    langfuse_handler.user_id    = st.session_state.username
+
     state = {
-        "messages":  st.session_state.messages + [HumanMessage(content=user_input)],
-        "next":      "",
-        "role":      st.session_state.role,
-        "username":  st.session_state.username,
+        "messages":   st.session_state.messages + [HumanMessage(content=user_input)],
+        "next":       "",
+        "role":       st.session_state.role,
+        "username":   st.session_state.username,
+        "turn_count": 0,   # ← reset per user message
     }
 
-    result = app.invoke(state)
+    result = app.invoke(
+        state,
+        config={"callbacks": [langfuse_handler]},   # ← Langfuse traces the graph
+    )
 
-    # Extract last AI message
+    # ── extract final AI text response ───────────────────────────────────────
     for msg in reversed(result["messages"]):
         if hasattr(msg, "content") and msg.type == "ai":
             if not getattr(msg, "tool_calls", None):
@@ -110,8 +120,8 @@ def show_login():
     st.divider()
 
     with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
+        username  = st.text_input("Username")
+        password  = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Login", use_container_width=True)
 
     if submitted:
@@ -138,7 +148,7 @@ def show_chat():
         with st.chat_message(role):
             st.markdown(msg.content)
 
-    # CV upload for jobseekers
+    # CV upload widget (jobseekers only)
     if st.session_state.role == "jobseeker":
         with st.expander("📄 Upload your CV"):
             col1, col2 = st.columns([3, 1])
@@ -200,7 +210,6 @@ def show_admin():
     st.subheader("Candidate Management")
     st.caption("Update candidate states here. Changes are saved immediately.")
 
-    # Filter controls
     col1, col2, col3 = st.columns(3)
     with col1:
         filter_category = st.selectbox("Filter by category", ["All"] + [
@@ -219,7 +228,6 @@ def show_admin():
 
     candidates = get_all_candidates()
 
-    # Apply filters
     if filter_category != "All":
         candidates = [c for c in candidates if c["category"] == filter_category]
     if filter_level != "All":
@@ -234,7 +242,6 @@ def show_admin():
         st.info("No candidates match the selected filters.")
         return
 
-    # Candidate rows
     STATE_OPTIONS = ["available", "interviewed", "placed", "inactive"]
 
     for candidate in candidates:
@@ -278,7 +285,6 @@ def main():
         show_login()
         return
 
-    # Sidebar
     with st.sidebar:
         st.title("💼 JobStation")
         st.caption(f"Logged in as **{st.session_state.username}**")
@@ -290,7 +296,6 @@ def main():
                 del st.session_state[key]
             st.rerun()
 
-    # Role-based tabs
     if st.session_state.role == "company":
         chat_tab, admin_tab = st.tabs(["💬 Chat", "🗂️ Candidates"])
         with chat_tab:

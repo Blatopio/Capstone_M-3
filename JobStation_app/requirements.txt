@@ -8,6 +8,9 @@ langchain_qdrant
 langgraph
 
 openai
+
+#Observability
+langfuse
  
 #VECTOR DATABASE
 qdrant-client
