@@ -13,6 +13,11 @@ MYSQL_CONFIG = {
     "database": os.getenv("MYSQL_DATABASE"),
 }
  
+MYSQL_URI = (
+    f"mysql+mysqlconnector://{MYSQL_CONFIG['user']}:"
+    f"{MYSQL_CONFIG['password']}@{MYSQL_CONFIG['host']}:"
+    f"{MYSQL_CONFIG['port']}/{MYSQL_CONFIG['database']}"
+)
  
 def get_mysql_connection():
     """Returns a live MySQL connection using env config."""
