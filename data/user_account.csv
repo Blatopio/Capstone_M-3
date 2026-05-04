@@ -1,0 +1,11 @@
+id,username,password,role,qdrant_id,created_at
+1,jobseeker1,js123,jobseeker,0bb876ad-4b0d-4f43-b721-e10c00900606,"2026-05-03 15:11:59"
+2,jobseeker2,js123,jobseeker,d0f9cc46-aa2d-4d19-b137-0df886596714,"2026-05-03 15:11:59"
+3,jobseeker3,js123,jobseeker,NULL,"2026-05-03 15:11:59"
+4,jobseeker4,js123,jobseeker,NULL,"2026-05-03 15:11:59"
+5,jobseeker5,js123,jobseeker,NULL,"2026-05-03 15:11:59"
+6,company1,hr123,company,NULL,"2026-05-03 15:11:59"
+7,company2,hr123,company,NULL,"2026-05-03 15:11:59"
+8,company3,hr123,company,NULL,"2026-05-03 15:11:59"
+9,company4,hr123,company,NULL,"2026-05-03 15:11:59"
+10,company5,hr123,company,NULL,"2026-05-03 15:11:59"

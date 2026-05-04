@@ -209,25 +209,37 @@ def upload_cv_tool(cv_text: str, category: str, username: str) -> str:
 
 
 @tool
-def get_recommendations_tool(cv_text: str, top_k: int = 3) -> str:
+def get_recommendations_tool(username: str, top_k: int = 3) -> str:
     """
-    Given a jobseeker's CV text, find similar profiles in the database
-    and recommend the best matching job categories.
+    Fetch the jobseeker's stored CV from Qdrant using their username,
+    then recommend the best matching job categories based on it.
+    No need for the user to paste their CV again.
 
     Args:
-        cv_text: the jobseeker's CV text
-        top_k:   number of similar profiles to retrieve (default 3)
+        username: the logged-in jobseeker's username
+        top_k:    number of similar profiles to retrieve (default 3)
     """
+    from JobStation_app.tools.utils import get_cv_text_by_username
+
+    # Auto-fetch CV from Qdrant via username → qdrant_id in MySQL
+    cv_text = get_cv_text_by_username(username)
+
+    if not cv_text:
+        return (
+            "I could not find an uploaded CV for your account. "
+            "Please upload your CV first using the 'Upload your CV' button above."
+        )
+
     vectorstore = get_qdrant_vectorstore()
     results     = vectorstore.similarity_search(cv_text, k=top_k)
 
     if not results:
-        return "No similar profiles found in our database."
+        return "No similar profiles found in our database yet."
 
-    categories    = [doc.metadata.get("category", "UNKNOWN") for doc in results]
+    categories     = [doc.metadata.get("category", "UNKNOWN") for doc in results]
     top_categories = Counter(categories).most_common()
 
-    output = "Based on your CV, here are the best matching job categories:\n\n"
+    output = "Based on your uploaded CV, here are the best matching job categories:\n\n"
     for cat, count in top_categories:
         output += f"  • {cat} ({count} similar profile(s) found)\n"
 

@@ -6,7 +6,7 @@ from JobStation_app.graph.workflow import app
 from JobStation_app.tools.utils import *
 from JobStation_app.config import langfuse_handler
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 # ─── PAGE CONFIG ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -24,11 +24,14 @@ if "role"       not in st.session_state:
     st.session_state.role       = ""
 if "messages"   not in st.session_state:
     st.session_state.messages   = []
+if "chat_meta"  not in st.session_state:
+    # Parallel list to AI messages only.
+    # Each entry: {"tool_results": [...], "input_tokens": int, "output_tokens": int}
+    st.session_state.chat_meta  = []
 
 
 # ─── HELPERS ───────────────────────────────────────────────────────────────────
 def verify_login(username: str, password: str) -> dict | None:
-    """Check credentials against MySQL users table."""
     try:
         conn   = get_mysql_connection()
         cursor = conn.cursor(dictionary=True)
@@ -46,20 +49,19 @@ def verify_login(username: str, password: str) -> dict | None:
 
 
 def extract_pdf_text(uploaded_file) -> str:
-    """Extract plain text from an uploaded PDF file."""
     with pdfplumber.open(io.BytesIO(uploaded_file.read())) as pdf:
-        return "\n".join(
-            page.extract_text() or "" for page in pdf.pages
-        ).strip()
+        return "\n".join(page.extract_text() or "" for page in pdf.pages).strip()
 
 
-def run_agent(user_input: str) -> str:
+def run_agent(user_input: str) -> dict:
     """
-    Invoke the LangGraph app with current session state.
-    Langfuse traces the full session via langfuse_handler.
-    Returns the agent's final text response.
+    Invoke the LangGraph app.
+    Returns:
+        response      : str   - final AI text reply
+        tool_results  : list  - raw content from ToolMessage nodes (RAG sources)
+        input_tokens  : int
+        output_tokens : int
     """
-    # ── tag Langfuse session with current user ────────────────────────────────
     langfuse_handler.session_id = f"jobstation-{st.session_state.username}"
     langfuse_handler.user_id    = st.session_state.username
 
@@ -68,31 +70,54 @@ def run_agent(user_input: str) -> str:
         "next":       "",
         "role":       st.session_state.role,
         "username":   st.session_state.username,
-        "turn_count": 0,   # ← reset per user message
+        "turn_count": 0,
     }
 
     result = app.invoke(
         state,
-        config={"callbacks": [langfuse_handler]},   # ← Langfuse traces the graph
+        config={"callbacks": [langfuse_handler]},
     )
 
-    # ── extract final AI text response ───────────────────────────────────────
-    for msg in reversed(result["messages"]):
-        if hasattr(msg, "content") and msg.type == "ai":
-            if not getattr(msg, "tool_calls", None):
-                return msg.content
+    all_messages = result.get("messages", [])
 
-    return "I could not generate a response. Please try again."
+    # Final AI text
+    response_text = "I could not generate a response. Please try again."
+    for msg in reversed(all_messages):
+        if hasattr(msg, "type") and msg.type == "ai":
+            if not getattr(msg, "tool_calls", None):
+                response_text = msg.content
+                break
+
+    # Tool results (RAG documents / tool outputs)
+    tool_results = []
+    for msg in all_messages:
+        if isinstance(msg, ToolMessage):
+            tool_results.append(msg.content)
+
+    # Token usage
+    input_tokens  = 0
+    output_tokens = 0
+    for msg in all_messages:
+        if hasattr(msg, "type") and msg.type == "ai":
+            usage = getattr(msg, "usage_metadata", None) or getattr(msg, "response_metadata", {})
+            if isinstance(usage, dict):
+                input_tokens  += usage.get("input_tokens",  0) or usage.get("prompt_tokens",    0)
+                output_tokens += usage.get("output_tokens", 0) or usage.get("completion_tokens", 0)
+
+    return {
+        "response":      response_text,
+        "tool_results":  tool_results,
+        "input_tokens":  input_tokens,
+        "output_tokens": output_tokens,
+    }
 
 
 def get_all_candidates():
-    """Fetch all candidates from MySQL for the admin panel."""
     conn   = get_mysql_connection()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
         SELECT id, category, prof_level, state, updated_at
-        FROM candidates
-        ORDER BY updated_at DESC
+        FROM candidates ORDER BY updated_at DESC
     """)
     rows = cursor.fetchall()
     cursor.close()
@@ -101,7 +126,6 @@ def get_all_candidates():
 
 
 def update_candidate_state(candidate_id: int, new_state: str):
-    """Update a candidate's state in MySQL."""
     conn   = get_mysql_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -111,6 +135,41 @@ def update_candidate_state(candidate_id: int, new_state: str):
     conn.commit()
     cursor.close()
     conn.close()
+
+
+# ─── RENDER ASSISTANT TURN WITH EXPANDERS ──────────────────────────────────────
+def render_assistant_turn(response: str, meta: dict):
+    """
+    Renders one assistant chat bubble with three collapsible expanders:
+      Tool Calls    - only shown when tools were used (RAG sources)
+      History Chat  - full conversation so far
+      Usage Details - input / output token counts
+    """
+    with st.chat_message("assistant"):
+        st.markdown(response)
+
+        # 1. Tool Calls - only when tools were actually invoked
+        if meta.get("tool_results"):
+            with st.expander("🔧 Tool Calls:"):
+                for tr in meta["tool_results"]:
+                    st.code(tr, language="text")
+
+        # 2. Chat History
+        with st.expander("🕘 History Chat:"):
+            lines = []
+            for msg in st.session_state.messages:
+                role = "Human" if msg.type == "human" else "AI"
+                lines.append(f"{role}: {msg.content}")
+            lines.append(f"AI: {response}")
+            st.code("\n".join(lines), language="text")
+
+        # 3. Usage Details
+        with st.expander("📊 Usage Details:"):
+            st.code(
+                f"input token  : {meta['input_tokens']}\n"
+                f"output token : {meta['output_tokens']}",
+                language="text"
+            )
 
 
 # ─── LOGIN SCREEN ──────────────────────────────────────────────────────────────
@@ -128,13 +187,13 @@ def show_login():
         if not username or not password:
             st.warning("Please enter both username and password.")
             return
-
         user = verify_login(username, password)
         if user:
             st.session_state.logged_in = True
             st.session_state.username  = user["username"]
             st.session_state.role      = user["role"]
             st.session_state.messages  = []
+            st.session_state.chat_meta = []
             st.rerun()
         else:
             st.error("Invalid username or password.")
@@ -142,11 +201,20 @@ def show_login():
 
 # ─── CHAT INTERFACE ────────────────────────────────────────────────────────────
 def show_chat():
-    # Display chat history
+    # Replay stored history with metadata expanders
+    ai_turn_index = 0
     for msg in st.session_state.messages:
-        role = "user" if msg.type == "human" else "assistant"
-        with st.chat_message(role):
-            st.markdown(msg.content)
+        if msg.type == "human":
+            with st.chat_message("user"):
+                st.markdown(msg.content)
+        else:
+            meta = (
+                st.session_state.chat_meta[ai_turn_index]
+                if ai_turn_index < len(st.session_state.chat_meta)
+                else {"tool_results": [], "input_tokens": 0, "output_tokens": 0}
+            )
+            render_assistant_turn(msg.content, meta)
+            ai_turn_index += 1
 
     # CV upload widget (jobseekers only)
     if st.session_state.role == "jobseeker":
@@ -176,33 +244,42 @@ def show_chat():
                             f"My category is {category}. "
                             f"Here is my CV text:\n\n{cv_text[:3000]}"
                         )
-                        response = run_agent(prompt)
+                        result = run_agent(prompt)
                         st.session_state.messages.append(
-                            HumanMessage(content=f"[CV Upload — {category}]")
+                            HumanMessage(content=f"[CV Upload - {category}]")
                         )
-                        from langchain_core.messages import AIMessage
                         st.session_state.messages.append(
-                            AIMessage(content=response)
+                            AIMessage(content=result["response"])
                         )
+                        st.session_state.chat_meta.append({
+                            "tool_results":  result["tool_results"],
+                            "input_tokens":  result["input_tokens"],
+                            "output_tokens": result["output_tokens"],
+                        })
                         st.rerun()
                     else:
                         st.error("Could not extract text from PDF.")
 
     # Chat input
     if prompt := st.chat_input("Type your message..."):
-        from langchain_core.messages import AIMessage
-
         st.session_state.messages.append(HumanMessage(content=prompt))
 
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                response = run_agent(prompt)
-            st.markdown(response)
+        with st.spinner("Thinking..."):
+            result = run_agent(prompt)
 
-        st.session_state.messages.append(AIMessage(content=response))
+        st.session_state.messages.append(AIMessage(content=result["response"]))
+        st.session_state.chat_meta.append({
+            "tool_results":  result["tool_results"],
+            "input_tokens":  result["input_tokens"],
+            "output_tokens": result["output_tokens"],
+        })
+
+        # st.rerun() replays show_chat() which renders the message via history loop
+        # DO NOT call render_assistant_turn() here — it would duplicate the bubble
+        st.rerun()
 
 
 # ─── ADMIN PANEL ───────────────────────────────────────────────────────────────
@@ -223,11 +300,10 @@ def show_admin():
         filter_state = st.selectbox("Filter by state",
             ["All", "available", "interviewed", "placed", "inactive"])
 
-    if st.button("🔄 Refresh", use_container_width=False):
+    if st.button("Refresh"):
         st.rerun()
 
     candidates = get_all_candidates()
-
     if filter_category != "All":
         candidates = [c for c in candidates if c["category"] == filter_category]
     if filter_level != "All":
@@ -243,24 +319,17 @@ def show_admin():
         return
 
     STATE_OPTIONS = ["available", "interviewed", "placed", "inactive"]
-
     for candidate in candidates:
         col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
-
         with col1:
             st.caption("ID")
             st.write(str(candidate["id"]))
         with col2:
             st.caption("Category / Level")
-            st.write(f"{candidate['category']} — {candidate['prof_level']}")
+            st.write(f"{candidate['category']} - {candidate['prof_level']}")
         with col3:
             st.caption("Current state")
-            state_color = {
-                "available":   "🟢",
-                "interviewed": "🟡",
-                "placed":      "🔵",
-                "inactive":    "⚫"
-            }
+            state_color = {"available": "🟢", "interviewed": "🟡", "placed": "🔵", "inactive": "⚫"}
             st.write(f"{state_color.get(candidate['state'], '')} {candidate['state']}")
         with col4:
             st.caption("Update state")
@@ -275,7 +344,6 @@ def show_admin():
                 update_candidate_state(candidate["id"], new_state)
                 st.success("Updated!")
                 st.rerun()
-
         st.divider()
 
 
@@ -290,7 +358,6 @@ def main():
         st.caption(f"Logged in as **{st.session_state.username}**")
         st.caption(f"Role: `{st.session_state.role}`")
         st.divider()
-
         if st.button("Logout", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
