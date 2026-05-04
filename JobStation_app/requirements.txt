@@ -1,0 +1,30 @@
+#LLM
+langchain
+langchain-openai
+langchain-community
+langchain_core
+langchain_qdrant
+
+langgraph
+
+openai
+
+#Observability
+langfuse
+ 
+#VECTOR DATABASE
+qdrant-client
+ 
+#SQL DATABASE
+mysql-connector-python
+sqlalchemy
+ 
+#UI
+streamlit
+pdfplumber
+
+ 
+#DATA & UTILITIES
+pandas
+python-dotenv
+tqdm
