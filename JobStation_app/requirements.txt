@@ -18,6 +18,7 @@ sqlalchemy
  
 #UI
 streamlit
+pdfplumber
  
 #DATA & UTILITIES
 pandas
