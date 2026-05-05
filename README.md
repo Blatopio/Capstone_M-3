@@ -111,7 +111,7 @@ Capstone_M-3/
 
 ### 1. Clone the repo
 ```bash
-git clone https://github.com/yourusername/Capstone_M-3.git
+git clone https://github.com/Blatopio/Capstone_M-3.git
 cd Capstone_M-3
 ```
 
@@ -220,8 +220,6 @@ All LLM calls are traced in **Langfuse** with session and user tagging. Each cha
 ## Author
 
 **Muhammad Fachreza Alghifari**  
-Purwadhika Digital Technology School — Module 3 Capstone Project  
-Industrial Engineering, Telkom University
 
 ---
 
