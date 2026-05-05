@@ -3,7 +3,7 @@
 > **Direct placement. No salary deductions.**  
 > An AI-powered job placement platform where jobseekers upload their CV once and get matched to the right opportunities — built with LangGraph, Qdrant, and Streamlit.
 
-🌐 **Live App:** [your-app-url.streamlit.app](https://your-app-url.streamlit.app)
+🌐 **Live App:** jobstationapp.streamlit.app
 
 ---
 
